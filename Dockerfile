@@ -21,7 +21,10 @@ ENV     RUSTFLAGS="-C target-feature=-crt-static"
 # Create dummy main.rs files for each workspace member to be able to compile all the dependencies
 RUN     find . -type d -name "meilisearch-*" | xargs -I{} sh -c 'mkdir {}/src; echo "fn main() { }" > {}/src/main.rs;'
 # Use `cargo build` instead of `cargo vendor` because we need to not only download but compile dependencies too
-RUN     $HOME/.cargo/bin/cargo build --release
+RUN     if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+            export JEMALLOC_SYS_WITH_LG_PAGE=16; \
+        fi && \
+        $HOME/.cargo/bin/cargo build --release
 # Cleanup dummy main.rs files
 RUN     find . -path "*/src/main.rs" -delete
 
@@ -30,7 +33,10 @@ ARG     COMMIT_DATE
 ENV     COMMIT_SHA=${COMMIT_SHA} COMMIT_DATE=${COMMIT_DATE}
 
 COPY    . .
-RUN     $HOME/.cargo/bin/cargo build --release
+RUN     if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+            export JEMALLOC_SYS_WITH_LG_PAGE=16; \
+        fi && \
+        $HOME/.cargo/bin/cargo build --release
 
 # Run
 FROM    alpine:3.14
@@ -39,11 +45,21 @@ ENV     MEILI_HTTP_ADDR 0.0.0.0:7700
 ENV     MEILI_SERVER_PROVIDER docker
 
 RUN     apk update --quiet \
-        && apk add -q --no-cache libgcc tini curl
+        && apk add -q --no-cache libgcc tini
 
-COPY    --from=compiler /meilisearch/target/release/meilisearch .
+# add meilisearch to the `/bin` so you can run it from anywhere and it's easy
+# to find.
+COPY    --from=compiler /meilisearch/target/release/meilisearch /bin/meilisearch
+
+# We want user to mount this directory as a volume
+RUN     mkdir /data
+
+# This directory should hold all the data related to meilisearch so we're going
+# to move our PWD in there.
+# We don't want to put the meilisearch binary
+WORKDIR /data
 
 EXPOSE  7700/tcp
 
 ENTRYPOINT ["tini", "--"]
-CMD     ./meilisearch
+CMD     meilisearch
